@@ -1,0 +1,99 @@
+From: OpenWrt scratch debug
+Subject: DEBUG: net: airoha: trace silent RX drops in airoha_qdma_rx_process
+
+DEBUG-only diagnostic patch, part of an investigation into a silent
+DHCP-reply (and possibly PPPoE PADO) receive loss on the Nokia
+XG-040G-MF (Airoha AN7583).
+
+airoha_qdma_rx_process() has FOUR "goto free_frag" exits that
+silently discard an already-DMA'd frame with zero visibility from
+userspace: bad descriptor length, airoha_qdma_get_gdm_dev() failing
+to resolve a netdev from the descriptor's "sport" field,
+airoha_qdma_build_rx_skb() returning NULL (skb alloc/LRO-parse
+failure), and a scattered-frame frag-count overflow. None of these
+increment dev->stats, none of these are visible to ethtool -S,
+AF_PACKET/tcpdump, netfilter or conntrack - the frame is freed before
+a netdev, let alone the IP stack, ever sees it.
+
+This patch instruments all four paths with rate-limited pr_warn()s.
+Live-tested against multiple independent field reproductions of the
+DHCP-reply black hole, with zero hits every time - a genuine negative
+result, not a lack of trying: net_ratelimit() was nowhere near
+exhausted in any of the observation windows (well under 1 kernel log
+line per 30s). That rules out get_dev_from_sport()/build-time sport
+misclassification as the cause and pushes the likely fault upstream
+of the driver's software RX processing entirely - most plausibly FE/
+PPE hardware classification dropping or misrouting the frame before
+it ever becomes a QDMA descriptor for the CPU, since only 5 of the
+possible CRSN reason codes get an explicit queue assignment in
+airoha_fe_crsn_qsel_init(). AN7583 (MF) has a single PPE block
+(num_ppe=1) vs AN7581/MD's two (num_ppe=2) - a concrete hardware-level
+asymmetry that could explain why MD has never reproduced this.
+
+Rate-limited via net_ratelimit() to survive an extended natural
+reproduction window without flooding the ring buffer.
+
+Not for upstream submission.
+---
+ drivers/net/ethernet/airoha/airoha_eth.c | 34 +++++++++++++++++++++++++++---
+ 1 file changed, 30 insertions(+), 4 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -920,24 +920,52 @@
+ 		page = virt_to_head_page(e->buf);
+ 		len = FIELD_GET(QDMA_DESC_LEN_MASK, desc_ctrl);
+ 		data_len = q->skb ? AIROHA_RX_LEN(q->buf_size) : e->dma_len;
+-		if (!len || data_len < len)
++		if (!len || data_len < len) {
++			if (net_ratelimit())
++				pr_warn("airoha_eth: DEBUG rx drop reason=badlen len=%u data_len=%d msg0=%08x msg1=%08x msg2=%08x msg3=%08x\n",
++					len, data_len,
++					le32_to_cpu(READ_ONCE(desc->msg0)),
++					le32_to_cpu(READ_ONCE(desc->msg1)),
++					le32_to_cpu(READ_ONCE(desc->msg2)),
++					le32_to_cpu(READ_ONCE(desc->msg3)));
+ 			goto free_frag;
++		}
+ 
+ 		dev = airoha_qdma_get_gdm_dev(eth, desc);
+-		if (IS_ERR(dev))
++		if (IS_ERR(dev)) {
++			if (net_ratelimit())
++				pr_warn("airoha_eth: DEBUG rx drop reason=nodev len=%u sport=%lu msg0=%08x msg1=%08x msg2=%08x msg3=%08x\n",
++					len,
++					FIELD_GET(QDMA_ETH_RXMSG_SPORT_MASK,
++						  le32_to_cpu(READ_ONCE(desc->msg1))),
++					le32_to_cpu(READ_ONCE(desc->msg0)),
++					le32_to_cpu(READ_ONCE(desc->msg1)),
++					le32_to_cpu(READ_ONCE(desc->msg2)),
++					le32_to_cpu(READ_ONCE(desc->msg3)));
+ 			goto free_frag;
++		}
+ 
+ 		netdev = netdev_from_priv(dev);
+ 		if (!q->skb) { /* first buffer */
+ 			q->skb = airoha_qdma_build_rx_skb(q, desc, e, netdev);
+-			if (!q->skb)
++			if (!q->skb) {
++				if (net_ratelimit())
++					pr_warn("airoha_eth: DEBUG rx drop reason=noskb netdev=%s len=%u msg1=%08x msg2=%08x\n",
++						netdev->name, len,
++						le32_to_cpu(READ_ONCE(desc->msg1)),
++						le32_to_cpu(READ_ONCE(desc->msg2)));
+ 				goto free_frag;
++			}
+ 		} else { /* scattered frame */
+ 			struct skb_shared_info *shinfo = skb_shinfo(q->skb);
+ 			int nr_frags = shinfo->nr_frags;
+ 
+-			if (nr_frags >= ARRAY_SIZE(shinfo->frags))
++			if (nr_frags >= ARRAY_SIZE(shinfo->frags)) {
++				if (net_ratelimit())
++					pr_warn("airoha_eth: DEBUG rx drop reason=nrfrags netdev=%s\n",
++						netdev->name);
+ 				goto free_frag;
++			}
+ 
+ 			skb_add_rx_frag(q->skb, nr_frags, page,
+ 					e->buf - page_address(page), len,
