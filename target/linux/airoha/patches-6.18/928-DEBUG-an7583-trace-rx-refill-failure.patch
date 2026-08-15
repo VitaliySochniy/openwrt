@@ -1,0 +1,62 @@
+From: OpenWrt scratch debug
+Subject: DEBUG: net: airoha: trace RX ring refill failures
+
+DEBUG-only diagnostic patch, part of an investigation into a silent
+DHCP-reply (and PPPoE PADO) receive loss on the Nokia XG-040G-MF
+(Airoha AN7583).
+
+airoha_qdma_fill_rx_queue() tops each RX ring back up to ndesc-1
+posted descriptors after every NAPI poll. If page_pool_dev_alloc_frag()
+fails, the loop breaks silently and the ring is left under-filled;
+no counter, no log line. The only thing that can trigger another
+fill attempt for that ring is a NEW packet arriving on it (which
+schedules its NAPI poll) - so a ring that drains all the way to zero
+posted descriptors before a fill attempt succeeds again can never
+receive another frame: nothing will ever trigger its NAPI poll again,
+so fill_rx_queue() never runs again for it either. That is a genuine
+hardware deadlock, not a transient drop, and it would explain why the
+DHCP/PPPoE loss never self-recovers once it starts.
+
+This is particularly plausible for RX queue 4, which upstream (and
+Airoha's own reference SDK) size at only 16 descriptors and route
+essentially all "VIP" force-to-CPU control traffic through: PPPoE
+Discovery, every PPP negotiation stage (LCP/IPCP/CHAP/PAP/IPv6CP),
+ISAKMP, BOOTP, DHCPv6, SIP, FTP control, LLDP, and more, all sharing
+the same tiny ring. A burst of several of these in quick succession
+(e.g. the LCP/IPCP/CHAP/PAP cascade right after a PPPoE PADO) could
+plausibly drain 16 descriptors faster than NAPI can refill them,
+especially if page_pool allocation stalls even once during the burst.
+This would also explain why PPPoE fails in ~1.5-2 minutes while DHCP
+takes ~36-45 minutes: PPPoE drives far more traffic through this same
+shared ring in a short window than DHCP's occasional renewal does.
+
+None of the existing 4 RX-drop trace points (see
+925-DEBUG-an7583-trace-rx-classify-drop.patch) cover this path - they
+all instrument airoha_qdma_rx_process() (handling of an already-
+arrived descriptor), not airoha_qdma_fill_rx_queue() (posting fresh
+descriptors back to the ring). This patch adds a rate-limited
+pr_warn() at the refill failure point, logging the ring index, how
+many descriptors are currently posted vs. the ring size, and how many
+were successfully refilled before the failure. If this fires
+repeatedly for queue 4 in the runup to a DHCP/PPPoE failure, with
+"queued" trending toward zero, that would directly confirm the
+descriptor-exhaustion/deadlock mechanism.
+
+Not for upstream submission.
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -680,8 +680,12 @@
+ 
+ 		page = page_pool_dev_alloc_frag(q->page_pool, &offset,
+ 						q->buf_size);
+-		if (!page)
++		if (!page) {
++			if (net_ratelimit())
++				pr_warn("airoha_eth: DEBUG rx refill fail qid=%d queued=%d ndesc=%d filled=%d\n",
++					qid, q->queued, q->ndesc, nframes);
+ 			break;
++		}
+ 
+ 		q->head = (q->head + 1) % q->ndesc;
+ 		q->queued++;
