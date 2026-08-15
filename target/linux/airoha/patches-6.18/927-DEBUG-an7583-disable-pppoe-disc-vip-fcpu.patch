@@ -1,0 +1,40 @@
+From: OpenWrt scratch debug
+Subject: DEBUG: net: airoha: disable FE VIP force-to-CPU for PPPoE Discovery
+
+DEBUG-only diagnostic patch, part of an investigation into a silent
+DHCP-reply receive loss on the Nokia XG-040G-MF (Airoha AN7583).
+
+airoha_fe_vip_setup() force-routes PPPoE Discovery frames (ethertype
+0x8863, REG_FE_VIP_PATN(3)) onto the same hardware "force to CPU"
+classification path (PATN_FCPU_EN_MASK, RX queue 4 via
+REG_CDM_FWD_CFG CDM_VIP_QSEL_MASK=0x4) as BOOTP (see the companion
+926-DEBUG-an7583-disable-bootp-vip-fcpu.patch in this series).
+
+This is untested against an actual PPPoE/BRAS reproduction - it is
+offered as a candidate experiment for anyone who can reproduce
+openwrt/openwrt#24715 (PPPoE PADO never arriving from the BRAS on
+this same board after the first ~2 minutes), based on the working
+hypothesis that both symptoms share the same underlying FE VIP
+force-to-CPU mechanism, just triggered on different traffic classes.
+Removing PATN_FCPU_EN_MASK from the BOOTP entries (926) has shown a
+DHCP-reply loss-free run well past the previous consistent 36-45
+minute failure window in early testing; this patch applies the
+identical technique to the PPPoE Discovery entry to see whether it
+similarly avoids the PADO loss. Not a confirmed fix either way.
+
+Not for upstream submission - diagnostic-only, changes hardware
+classification behavior for PPPoE Discovery traffic.
+
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -201,7 +201,8 @@
+ static void airoha_fe_vip_setup(struct airoha_eth *eth)
+ {
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(3), ETH_P_PPP_DISC);
+-	airoha_fe_wr(eth, REG_FE_VIP_EN(3), PATN_FCPU_EN_MASK | PATN_EN_MASK);
++	/* DEBUG: force-to-CPU intentionally disabled here */
++	airoha_fe_wr(eth, REG_FE_VIP_EN(3), PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(4), PPP_LCP);
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(4),
