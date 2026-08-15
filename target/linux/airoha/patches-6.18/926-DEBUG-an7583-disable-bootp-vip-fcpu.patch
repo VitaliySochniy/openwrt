@@ -1,0 +1,69 @@
+From: OpenWrt scratch debug
+Subject: DEBUG: net: airoha: disable FE VIP force-to-CPU for BOOTP patterns
+
+DEBUG-only diagnostic patch, part of an investigation into a silent
+DHCP-reply (and possibly PPPoE PADO) receive loss on the Nokia
+XG-040G-MF (Airoha AN7583).
+
+airoha_fe_vip_setup() programs two FE "VIP" pattern-match entries
+(REG_FE_VIP_PATN/EN 8 and 9) that force BOOTP traffic (UDP src-port
+67 and 68) onto a special force-to-CPU classification path
+(PATN_FCPU_EN_MASK), independent of the normal per-port hash-based
+RX queue selection that all other traffic uses. That path routes
+into RX queue 4 (REG_CDM_FWD_CFG CDM_VIP_QSEL_MASK=0x4). The same
+mechanism (PATN_FCPU_EN_MASK, same RX queue 4) also force-routes
+PPPoE Discovery frames (ethertype 0x8863, REG_FE_VIP_PATN(3)).
+
+A field investigation with dual-sided pcap captured simultaneously on
+the Nokia XG-040G-MF and on the upstream DHCP server proved that
+DHCP-server replies are transmitted onto the wire (confirmed in the
+server's own capture, broadcast dst-MAC, replies within single-digit
+milliseconds) but never arrive at the MF's own network stack - not
+even visible to tcpdump/AF_PACKET on the WAN port, while unrelated
+broadcast traffic from the same source MAC on the same wire in the
+same window is received normally. A companion RX-drop trace patch
+(925-DEBUG-an7583-trace-rx-classify-drop.patch) never fires for this
+failure, meaning the frame never becomes a QDMA RX descriptor at all -
+the loss happens upstream of the driver's software RX loop, in FE
+hardware. Once triggered, the loss does not self-recover (observed
+continuously broken for tens of minutes across multiple
+reproductions) until the interface or the board is restarted.
+
+BOOTP is the only VIP pattern matched purely by UDP source port
+(PATN_SP_EN_MASK, no ethertype/DP match) among this table, and is
+the only one whose "force to CPU" queue (4) is also nominally
+LRO-range in the driver's queue layout - both are candidate causes,
+not confirmed root causes.
+
+This patch removes PATN_FCPU_EN_MASK from both BOOTP entries (8 and
+9), leaving PATN_EN_MASK/PATN_SP_EN_MASK/PATN_TYPE_MASK untouched.
+BOOTP traffic should then be classified through the same path as
+all other successfully-received traffic instead of being
+force-routed to CPU queue 4. This is a diagnostic experiment to
+isolate whether the FE VIP force-to-CPU mechanism itself (rather
+than queue 4/LRO specifically) is where the loss occurs.
+
+Not for upstream submission - diagnostic-only, changes hardware
+classification behavior for BOOTP/DHCP traffic.
+
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -221,13 +221,15 @@
+ 	/* BOOTP (0x43) */
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(8), 0x43);
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(8),
+-		     PATN_FCPU_EN_MASK | PATN_SP_EN_MASK |
++		     /* DEBUG: force-to-CPU intentionally disabled here */
++		     PATN_SP_EN_MASK |
+ 		     FIELD_PREP(PATN_TYPE_MASK, 4) | PATN_EN_MASK);
+ 
+ 	/* BOOTP (0x44) */
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(9), 0x44);
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(9),
+-		     PATN_FCPU_EN_MASK | PATN_SP_EN_MASK |
++		     /* DEBUG: force-to-CPU intentionally disabled here */
++		     PATN_SP_EN_MASK |
+ 		     FIELD_PREP(PATN_TYPE_MASK, 4) | PATN_EN_MASK);
+ 
+ 	/* ISAKMP */
