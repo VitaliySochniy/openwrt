@@ -1,0 +1,84 @@
+From: OpenWrt scratch debug
+Subject: DEBUG: net: airoha: disable FE VIP force-to-CPU for PPP LCP/IPCP/CHAP/IPv6CP/PAP
+
+DEBUG-only diagnostic patch, follow-up to 926/927 in this series.
+
+With 926 (BOOTP) and 927 (PPPoE Discovery) applied, PPPoE now dials
+reliably (PADI/PADO/PADR/PADS succeed every time), but the session
+dies after ~30s: our own LCP Conf-Request is retransmitted every 3s
+with zero replies ever received, matching "No response to N
+echo-requests" from openwrt/openwrt#24715 - just at the LCP
+negotiation stage instead of the later keepalive stage.
+
+airoha_fe_vip_setup() still force-routes PPP LCP/IPCP/CHAP/IPv6CP/PAP
+(REG_FE_VIP_PATN(4)/(6)/(7)/(11)/(19), PATN_TYPE_MASK=1 "match PPP
+protocol number inside a PPPoE session frame") onto the same "force
+to CPU" / RX queue 4 path as BOOTP and PPPoE Discovery. Live
+`/proc/interrupts` sampling during the failure shows RX queue 4's IRQ
+line stuck at exactly 0 for the entire ~30s window across many
+consecutive session attempts - it never fires even once, unlike the
+BOOTP case where it kept climbing throughout. This may indicate the
+loss for this traffic class happens upstream of the ring/QDMA layer
+entirely (in FE classification), a different mechanism than the
+NO_CPU_DSCP interrupt issue fixed separately.
+
+Applies the same technique as 926/927 to see whether removing
+force-to-CPU from these entries also avoids the loss, now for the LCP
+negotiation stage specifically.
+
+Not for upstream submission - diagnostic-only, changes hardware
+classification behavior for PPP control traffic.
+
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -205,19 +205,19 @@
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(3), PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(4), PPP_LCP);
++	/* DEBUG: force-to-CPU intentionally disabled here */
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(4),
+-		     PATN_FCPU_EN_MASK | FIELD_PREP(PATN_TYPE_MASK, 1) |
+-		     PATN_EN_MASK);
++		     FIELD_PREP(PATN_TYPE_MASK, 1) | PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(6), PPP_IPCP);
++	/* DEBUG: force-to-CPU intentionally disabled here */
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(6),
+-		     PATN_FCPU_EN_MASK | FIELD_PREP(PATN_TYPE_MASK, 1) |
+-		     PATN_EN_MASK);
++		     FIELD_PREP(PATN_TYPE_MASK, 1) | PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(7), PPP_CHAP);
++	/* DEBUG: force-to-CPU intentionally disabled here */
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(7),
+-		     PATN_FCPU_EN_MASK | FIELD_PREP(PATN_TYPE_MASK, 1) |
+-		     PATN_EN_MASK);
++		     FIELD_PREP(PATN_TYPE_MASK, 1) | PATN_EN_MASK);
+ 
+ 	/* BOOTP (0x43) */
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(8), 0x43);
+@@ -240,9 +240,9 @@
+ 		     FIELD_PREP(PATN_TYPE_MASK, 4) | PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(11), PPP_IPV6CP);
++	/* DEBUG: force-to-CPU intentionally disabled here */
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(11),
+-		     PATN_FCPU_EN_MASK | FIELD_PREP(PATN_TYPE_MASK, 1) |
+-		     PATN_EN_MASK);
++		     FIELD_PREP(PATN_TYPE_MASK, 1) | PATN_EN_MASK);
+ 
+ 	/* DHCPv6 */
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(12), 0x2220223);
+@@ -251,9 +251,9 @@
+ 		     FIELD_PREP(PATN_TYPE_MASK, 4) | PATN_EN_MASK);
+ 
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(19), PPP_PAP);
++	/* DEBUG: force-to-CPU intentionally disabled here */
+ 	airoha_fe_wr(eth, REG_FE_VIP_EN(19),
+-		     PATN_FCPU_EN_MASK | FIELD_PREP(PATN_TYPE_MASK, 1) |
+-		     PATN_EN_MASK);
++		     FIELD_PREP(PATN_TYPE_MASK, 1) | PATN_EN_MASK);
+ 
+ 	/* ETH->ETH_P_1905 (0x893a) */
+ 	airoha_fe_wr(eth, REG_FE_VIP_PATN(20), 0x893a);
