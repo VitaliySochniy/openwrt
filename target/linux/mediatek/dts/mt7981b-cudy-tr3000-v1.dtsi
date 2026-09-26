@@ -150,6 +150,17 @@
 					eeprom_factory_0: eeprom@0 {
 						reg = <0x0 0x1000>;
 					};
+
+					/* Unused on Cudy TR3000, which keeps its MAC
+					 * addresses in bdinfo. OrayBox X1Pro stores them
+					 * here instead and references this cell from its
+					 * device tree overlay.
+					 */
+					macaddr_factory_e000: macaddr@e000 {
+						compatible = "mac-base";
+						reg = <0xe000 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
 				};
 			};
 

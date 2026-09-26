@@ -1468,8 +1468,16 @@ define Device/cudy_tr3000-v1-ubootmod
   DEVICE_VENDOR := Cudy
   DEVICE_MODEL := TR3000
   DEVICE_VARIANT := v1 (OpenWrt U-Boot layout)
+  DEVICE_ALT0_VENDOR := OrayBox
+  DEVICE_ALT0_MODEL := X1Pro
+  DEVICE_ALT1_VENDOR := Oray
+  DEVICE_ALT1_MODEL := PGY-X1Pro
   DEVICE_DTS := mt7981b-cudy-tr3000-v1-ubootmod
+  DEVICE_DTS_OVERLAY := mt7981b-oraybox-x1pro
   DEVICE_DTS_DIR := ../dts
+  DEVICE_DTC_FLAGS := --pad 4096
+  DEVICE_DTS_LOADADDR := 0x43f00000
+  SUPPORTED_DEVICES += oraybox,x1pro
   DEVICE_PACKAGES := kmod-usb3 kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware
   UBINIZE_OPTS := -E 5
   BLOCKSIZE := 128k
@@ -1483,9 +1491,10 @@ define Device/cudy_tr3000-v1-ubootmod
 	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 64k
   IMAGE/sysupgrade.itb := append-kernel | \
 	fit gzip $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb external-static-with-rootfs | append-metadata
-  ARTIFACTS := preloader.bin bl31-uboot.fip
+  ARTIFACTS := preloader.bin bl31-uboot.fip oraybox_x1pro-bl31-uboot.fip
   ARTIFACT/preloader.bin := mt7981-bl2 cudy-ddr3
   ARTIFACT/bl31-uboot.fip := mt7981-bl31-uboot cudy_tr3000-v1
+  ARTIFACT/oraybox_x1pro-bl31-uboot.fip := mt7981-bl31-uboot oraybox_x1pro
 endef
 TARGET_DEVICES += cudy_tr3000-v1-ubootmod
 
