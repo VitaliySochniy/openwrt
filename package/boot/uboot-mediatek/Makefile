@@ -678,6 +678,17 @@ define U-Boot/mt7981_openwrt_one-nor
   DEPENDS:=+trusted-firmware-a-mt7981-nor-ddr4
 endef
 
+define U-Boot/mt7981_oraybox_x1pro
+  NAME:=OrayBox X1Pro
+  BUILD_SUBTARGET:=filogic
+  BUILD_DEVICES:=cudy_tr3000-v1-ubootmod
+  UBOOT_CONFIG:=mt7981_oraybox_x1pro
+  UBOOT_IMAGE:=u-boot.fip
+  BL2_BOOTDEV:=cudy-ddr3
+  BL2_SOC:=mt7981
+  DEPENDS:=+trusted-firmware-a-mt7981-cudy-ddr3
+endef
+
 define U-Boot/mt7981_rfb-spim-nand
   NAME:=MT7981 Reference Board
   BUILD_SUBTARGET:=filogic
@@ -1434,6 +1445,7 @@ UBOOT_TARGETS := \
 	mt7981_nokia_ea0326gmp \
 	mt7981_openwrt_one-snand \
 	mt7981_openwrt_one-nor \
+	mt7981_oraybox_x1pro \
 	mt7981_rfb-spim-nand \
 	mt7981_rfb-emmc \
 	mt7981_rfb-nor \
