@@ -27,7 +27,7 @@ gemtek_mac_bytes() {
 # missing or empty, as after the chainloader formatted the ubi partition.
 gemtek_prepare_factory() {
 	local ubidev vol mtd dsd ebs off eeprom wan lan fan serial mac
-	local blob="/tmp/factory.bin"
+	local blob="/tmp/factory.bin" eeprom_blob="/tmp/factory.eeprom"
 
 	ubidev="$(nand_find_ubi ubi)" || return 0
 	vol="$(nand_find_volume "$ubidev" factory)"
@@ -72,13 +72,28 @@ gemtek_prepare_factory() {
 		return 0
 	}
 
-	dd if=/dev/zero of="$blob" bs=4096 count=16 2>/dev/null
-	dd if="$mtd" bs=512 skip=$((eeprom / 512)) count=15 2>/dev/null | \
-		dd of="$blob" conv=notrunc 2>/dev/null
-	gemtek_mac_bytes "$wan" | dd of="$blob" bs=4096 seek=5 conv=notrunc 2>/dev/null
-	gemtek_mac_bytes "$lan" | dd of="$blob" bs=4096 seek=6 conv=notrunc 2>/dev/null
-	printf '%s' "$fan" | dd of="$blob" bs=4096 seek=7 conv=notrunc 2>/dev/null
-	printf '%s' "$serial" | dd of="$blob" bs=4096 seek=8 conv=notrunc 2>/dev/null
+	if ! dd if="$mtd" of="$eeprom_blob" bs=512 skip=$((eeprom / 512)) count=15 2>/dev/null ||
+		[ ! -f "$eeprom_blob" ] || [ "$(wc -c < "$eeprom_blob")" != "$((0x1e00))" ]; then
+		v "factory: incomplete EEPROM read, not rebuilding"
+		rm -f "$eeprom_blob"
+		return 0
+	fi
+
+	if ! {
+		dd if=/dev/zero of="$blob" bs=4096 count=16 2>/dev/null &&
+		[ "$(wc -c < "$blob")" -eq $((0x10000)) ] &&
+		dd if="$eeprom_blob" of="$blob" bs=512 conv=notrunc 2>/dev/null &&
+		gemtek_mac_bytes "$wan" | dd of="$blob" bs=4096 seek=5 conv=notrunc 2>/dev/null &&
+		gemtek_mac_bytes "$lan" | dd of="$blob" bs=4096 seek=6 conv=notrunc 2>/dev/null &&
+		printf '%s' "$fan" | dd of="$blob" bs=4096 seek=7 conv=notrunc 2>/dev/null &&
+		printf '%s' "$serial" | dd of="$blob" bs=4096 seek=8 conv=notrunc 2>/dev/null &&
+		[ "$(wc -c < "$blob")" -eq $((0x10000)) ];
+	}; then
+		v "factory: failed to build complete image, not rebuilding"
+		rm -f "$eeprom_blob" "$blob"
+		return 0
+	fi
+	rm -f "$eeprom_blob"
 
 	[ -n "$vol" ] || {
 		ubimkvol "/dev/$ubidev" -N factory -t static -s $((0x10000)) && \
