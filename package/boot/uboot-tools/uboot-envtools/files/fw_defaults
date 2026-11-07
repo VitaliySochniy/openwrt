@@ -1,6 +1,6 @@
 . /lib/functions/uci-defaults.sh
 
-fw_loadenv
+[ -d /var/run/uboot-env ] || fw_loadenv
 
 board_config_update
 

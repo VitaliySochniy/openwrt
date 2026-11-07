@@ -11,7 +11,11 @@ if (fs.lsdir(path)) {
 	exit(0);
 }
 
-let fp = fs.popen('fw_printenv');
+let cmd = ['fw_printenv'];
+if (length(ARGV))
+	push(cmd, '-c', ARGV[0]);
+
+let fp = fs.popen(cmd);
 let raw = fp.read('all');
 fp.close();
 

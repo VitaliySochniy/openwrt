@@ -1,0 +1,17 @@
+. /lib/functions.sh
+
+case "$(board_name)" in
+gemtek,xr1710g-ubi)
+	[ -d /var/run/uboot-env ] && return
+	. /lib/upgrade/nand.sh
+	ubi=$(nand_find_ubi ubi)
+	env=$(nand_find_volume "$ubi" ubootenv)
+	env2=$(nand_find_volume "$ubi" ubootenv2)
+	if [ -n "$env" ] && [ -n "$env2" ]; then
+		printf '/dev/%s 0x0 0x1f000 0x1f000 1\n/dev/%s 0x0 0x1f000 0x1f000 1\n' \
+			"$env" "$env2" > /tmp/fw_env.config
+		fw_loadenv /tmp/fw_env.config
+		rm -f /tmp/fw_env.config
+	fi
+	;;
+esac
