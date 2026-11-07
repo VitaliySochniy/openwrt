@@ -3,6 +3,7 @@
 'use strict';
 
 const path = '/var/run/uboot-env/';
+const config = '/tmp/fw_env.preinit.config';
 
 import * as fs from 'fs';
 
@@ -11,7 +12,10 @@ if (fs.lsdir(path)) {
 	exit(0);
 }
 
-let fp = fs.popen('fw_printenv');
+let normal = fs.stat('/etc/fw_env.config');
+let temporary = fs.stat(config);
+let early = (!normal || !normal.size) && temporary && temporary.size;
+let fp = fs.popen(early ? `fw_printenv -c ${config}` : 'fw_printenv');
 let raw = fp.read('all');
 fp.close();
 

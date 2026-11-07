@@ -3,6 +3,12 @@
 # Copyright (C) 2011-2012 OpenWrt.org
 #
 
+_ubootenv_write_app_config() {
+	local file=$1 dev=$2 offset=$3 envsize=$4 secsize=$5 numsec=$6
+	grep -qs "^[[:space:]]*${dev}[[:space:]]*${offset}" "$file" ||
+		printf '%s %s %s %s %s\n' "$dev" "$offset" "$envsize" "$secsize" "$numsec" >>"$file"
+}
+
 _ubootenv_add_uci_config() {
 	local cfgtype=$1
 	local dev=$2
@@ -10,6 +16,11 @@ _ubootenv_add_uci_config() {
 	local envsize=$4
 	local secsize=$5
 	local numsec=$6
+	if [ "$cfgtype" = ubootenv ] && [ -n "$UBOOTENV_EARLY_CONFIG" ] &&
+	   [ ! -s /etc/fw_env.config ] && [ -n "$dev" ] && [ "$dev" != /dev/ ]; then
+		_ubootenv_write_app_config "$UBOOTENV_EARLY_CONFIG" \
+			"$dev" "$offset" "$envsize" "$secsize" "$numsec"
+	fi
 	uci batch >/dev/null <<EOF
 add ubootenv $cfgtype
 set ubootenv.@$cfgtype[-1].dev='$dev'
@@ -36,13 +47,18 @@ ubootenv_add_app_config() {
 	local envsize
 	local secsize
 	local numsec
+	local file
 	config_get cfgtype "$1" TYPE
 	config_get dev "$1" dev
 	config_get offset "$1" offset
 	config_get envsize "$1" envsize
 	config_get secsize "$1" secsize
 	config_get numsec "$1" numsec
-	grep -qs "^[[:space:]]*${dev}[[:space:]]*${offset}" "/etc/fw_${cfgtype#uboot}.config" || echo "$dev $offset $envsize $secsize $numsec" >>"/etc/fw_${cfgtype#uboot}.config"
+	file="/etc/fw_${cfgtype#uboot}.config"
+	if [ "$cfgtype" = ubootenv ] && [ -n "$UBOOTENV_EARLY_CONFIG" ] && [ ! -s "$file" ]; then
+		file="$UBOOTENV_EARLY_CONFIG"
+	fi
+	_ubootenv_write_app_config "$file" "$dev" "$offset" "$envsize" "$secsize" "$numsec"
 }
 
 ubootenv_add_mtd() {

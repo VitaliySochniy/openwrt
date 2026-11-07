@@ -92,7 +92,28 @@ preinit_config_port() {
 	ip link set "$original" name "$netdev"
 }
 
+ubootenv_preinit_config() {
+	mkdir -p /tmp/.uci
+	[ -f /etc/uci-defaults/30_uboot-envtools ] && (
+		UBOOTENV_EARLY_CONFIG=/tmp/fw_env.preinit.config
+		export UBOOTENV_EARLY_CONFIG
+		rm -f "$UBOOTENV_EARLY_CONFIG"
+		. /etc/uci-defaults/30_uboot-envtools
+	)
+	# Existing UCI configs may skip board defaults before fw_env.config is available.
+	[ ! -s /etc/fw_env.config ] && [ -s /etc/config/ubootenv ] &&
+	[ -f /lib/uboot-envtools.sh ] && (
+		UBOOTENV_EARLY_CONFIG=/tmp/fw_env.preinit.config
+		export UBOOTENV_EARLY_CONFIG
+		. /lib/functions.sh
+		. /lib/uboot-envtools.sh
+		config_load ubootenv
+		config_foreach ubootenv_add_app_config ubootenv
+	)
+}
+
 preinit_config_board() {
+	[ -s /tmp/board.json ] || ubootenv_preinit_config
 	/bin/board_detect /tmp/board.json
 
 	[ -f "/tmp/board.json" ] || return
