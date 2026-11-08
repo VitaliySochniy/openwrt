@@ -20,17 +20,14 @@ On top of that:
   boots the recovery image via TFTP, retrying until a TFTP server
   answers, so a device can be recovered without a serial console.
 - The default menu entry runs boot_ubi, so a broken production volume
-  falls back to the recovery volume, and when neither boots the
-  recovery image is loaded via TFTP until a server answers.
-- As on the Nokia boards, a ubi partition that does not attach is
-  formatted, missing ubootenv, ubootenv2 and factory volumes are
-  created, and the environment is saved once, so fw_printenv and
-  fw_setenv work. CONFIG_ENV_SIZE is the ubootenv volume size that
-  uboot-envtools uses. The factory volume holds the Wi-Fi EEPROM and
-  the MAC addresses and is filled by sysupgrade from the vendor
-  partition; created empty here, it lets the kernel fall back to random
-  MAC addresses instead of deferring the Ethernet probe, so the recovery
-  image has a working network.
+  falls back to loading the recovery image via TFTP until a server answers.
+- On an attached ubi partition, missing ubootenv, ubootenv2 and factory
+  volumes are created and the environment is saved once. If attach
+  fails, boot continues to TFTP without erasing NAND; formatting remains
+  an explicit installation action. CONFIG_ENV_SIZE is the ubootenv
+  volume size that uboot-envtools uses. The factory volume holds the
+  Wi-Fi EEPROM and MAC addresses and is filled by sysupgrade from the
+  vendor partition; an empty volume lets recovery initialize Ethernet.
 - MMC support is disabled, as on the Nokia boards: the board has no
   eMMC, and with the environment in MMC and UBI the saveenv right after
   a format went to MMC, because env_load() picks the first location when
@@ -43,10 +40,10 @@ Based on the XR1710G chainloader by Kenneth Kasilag.
 Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 ---
  configs/an7581_xr1710g_defconfig                     | 106 ++++++++++++++++++++++++++++++++++++++++
- defenvs/an7581_xr1710g_env                           |  31 +++++++++++++++++++++++++++++++
+ defenvs/an7581_xr1710g_env                           |  32 ++++++++++++++++++++++++++++++++
  dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts | 131 ++++++++++++++++++++++++++++++++++++++++
  arch/arm/dts/an7581-xr1710g-ubi-u-boot.dtsi          |   7 +++++++
- 4 files changed, 275 insertions(+)
+ 4 files changed, 276 insertions(+)
  create mode 100644 configs/an7581_xr1710g_defconfig
  create mode 100644 defenvs/an7581_xr1710g_env
  create mode 100644 dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
@@ -163,7 +160,7 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +CONFIG_SHA512=y
 --- /dev/null
 +++ b/defenvs/an7581_xr1710g_env
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,32 @@
 +loadaddr=0x81800000
 +initaddr=0x89000000
 +ipaddr=192.168.1.1
@@ -171,11 +168,11 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +bootfile=openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb
 +bootled_pwr=status:red
 +bootled_rec=status:blue
-+boot_ubi=run ubi_prepare ; run boot_production ; run boot_recovery ; run boot_tftp_forever
++boot_ubi=run ubi_prepare ; run boot_production ; run boot_tftp_forever
 +boot_production=led $bootled_pwr on ; run ubi_read_production && bootm $loadaddr#$bootconf ; led $bootled_pwr off
-+boot_recovery=led $bootled_rec on ; run ubi_read_recovery && bootm $initaddr#$bootconf ; led $bootled_rec off
 +boot_tftp=tftpboot $initaddr $bootfile && bootm $initaddr#$bootconf
-+boot_tftp_forever=led $bootled_rec on ; while true ; do run boot_tftp ; sleep 1 ; done
++boot_tftp_prepare=ubi part ubi && run ubi_create_factory
++boot_tftp_forever=led $bootled_rec on ; run boot_tftp_prepare ; while true ; do run boot_tftp ; sleep 1 ; done
 +bootconf=config-1
 +bootcmd=run boot_ubi
 +bootdelay=3
@@ -184,16 +181,17 @@ Signed-off-by: Andrey Korshunov <razor1702@gmail.com>
 +bootmenu_delay=3
 +bootmenu_title=      [0;34m( ( ( [1;39mOpenWrt[0;34m ) ) )
 +bootmenu_0=Run default boot command.=run bootcmd
-+bootmenu_1=Boot system via TFTP.=run boot_tftp ; run bootmenu_confirm_return
-+bootmenu_2=Boot recovery system from flash.=run boot_recovery ; run bootmenu_confirm_return
-+bootmenu_3=Reboot.=reset
++bootmenu_1=Boot system via TFTP.=run boot_tftp_prepare ; run boot_tftp ; run bootmenu_confirm_return
++bootmenu_2=Reboot.=reset
 +check_buttons=if button reset ; then run boot_tftp_forever ; fi
 +preboot=run check_buttons
 +ubi_read_production=ubi read $loadaddr fit && iminfo $loadaddr
-+ubi_read_recovery=ubi check recovery && ubi read $initaddr recovery
-+ubi_prepare=ubi part ubi || run ubi_format ; run ubi_create_vols ; env exists _init_env && run _init_env
-+ubi_format=ubi detach ; mtd erase ubi && ubi part ubi ; reset
-+ubi_create_vols=ubi check ubootenv || ubi create ubootenv 0x1f000 dynamic ; ubi check ubootenv2 || ubi create ubootenv2 0x1f000 dynamic ; ubi check factory || ubi create factory 0x10000 static
++ubi_prepare=ubi part ubi && run ubi_create_vols && if env exists _init_env; then run _init_env; fi
++ubi_format=ubi detach ; mtd erase ubi && ubi part ubi && reset
++ubi_create_vols=run ubi_create_env && run ubi_create_env2 && run ubi_create_factory
++ubi_create_env=ubi check ubootenv || ubi create ubootenv 0x1f000 dynamic
++ubi_create_env2=ubi check ubootenv2 || ubi create ubootenv2 0x1f000 dynamic
++ubi_create_factory=ubi check factory || ubi create factory 0x10000 static
 +_init_env=setenv _init_env ; saveenv ; saveenv
 --- /dev/null
 +++ b/dts/upstream/src/arm64/airoha/an7581-xr1710g-ubi.dts
